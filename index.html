@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>图神经网络模型对比</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+    body {
+      font-family: 'Roboto', sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #f4f4f9;
+    }
+    header {
+      position: fixed;
+      top: 0;
+      width: 100%;
+      background: linear-gradient(90deg, #007BFF, #0056b3);
+      color: white;
+      padding: 10px 20px;
+      text-align: center;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    }
+    .container {
+      display: flex;
+      margin-top: 80px;
+    }
+    .sidebar {
+      width: 30%;
+      padding: 20px;
+      background-color: #fff;
+      box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+    }
+    .main-content {
+      width: 70%;
+      padding: 20px;
+    }
+    .chart-container {
+      background-color: #fff;
+      padding: 15px;
+      margin-bottom: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    }
+    h1, h2 {
+      color: #007BFF;
+    }
+    button {
+      background: linear-gradient(90deg, #007BFF, #00c4ff);
+      border: none;
+      padding: 12px 24px;
+      font-size: 16px;
+      color: white;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 10px rgba(0, 123, 255, 0.3);
+    }
+    select {
+      padding: 10px;
+      font-size: 16px;
+      border: 2px solid #007BFF;
+      border-radius: 5px;
+      margin: 10px 0;
+      width: 100%;
+    }
+    table th {
+      background: #007BFF;
+      color: white;
+    }
+    table td {
+      background-color: #fff;
+      transition: background-color 0.3s;
+    }
+    table tr:hover td {
+      background-color: #e6f0ff;
+    }
+    #loading {
+      margin-top: 10px;
+      color: #007BFF;
+      font-weight: bold;
+      animation: blink 1s infinite;
+    }
+    @keyframes blink {
+      0% { opacity: 1; }
+      50% { opacity: 0.5; }
+      100% { opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>图神经网络模型对比</h1>
+    <p>选择数据集和模型，查看训练结果和性能对比</p>
+  </header>
+  <div class="container">
+    <div class="sidebar">
+      <div class="dataset-selector">
+        <h2>选择数据集和模型</h2>
+        <select id="datasetSelect">
+          <option value="cora">Cora</option>
+          <option value="citeseer">CiteSeer</option>
+          <option value="pubmed">PubMed</option>
+        </select>
+        <select id="cacheSelect">
+          <option value="nocache">无缓存</option>
+          <option value="outdegree">出度排序缓存</option>
+          <option value="weighted">加权度数缓存</option>
+        </select>
+        <button onclick="trainModel()">开始训练</button>
+        <div id="loading" style="display: none;">训练中，请稍候...</div>
+      </div>
+      <div class="results">
+        <h2>性能结果</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>模型</th>
+              <th>测试准确率</th>
+              <th>命中率</th>
+              <th>平均时间 (s)</th>
+              <th>总时间 (s)</th>
+              <th>调用次数</th>
+            </tr>
+          </thead>
+          <tbody id="resultsTable"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="main-content">
+      <div class="chart-container">
+        <canvas id="lossChart"></canvas>
+      </div>
+      <div class="chart-container">
+        <canvas id="accuracyChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let lossChart, accuracyChart;
+
+    async function trainModel() {
+      const dataset = document.getElementById('datasetSelect').value;
+      const cacheType = document.getElementById('cacheSelect').value;
+      const loading = document.getElementById('loading');
+
+      loading.style.display = 'block';
+      try {
+        const response = await fetch('http://localhost:5000/train', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataset, cache_type: cacheType })
+        });
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const data = await response.json();
+        if (data.error) {
+          alert(data.error);
+          return;
+        }
+        updateCharts(data, `${dataset} - ${cacheType}`);
+        updateTable(data, `${dataset} - ${cacheType}`);
+      } catch (error) {
+        console.error('训练请求失败:', error);
+        alert('训练失败，请检查控制台日志');
+      } finally {
+        loading.style.display = 'none';
+      }
+    }
+
+    function updateCharts(data, label) {
+      const epochs = Array.from({ length: data.train_loss.length }, (_, i) => (i + 1) * 10);
+      if (!lossChart) {
+        const lossCtx = document.getElementById('lossChart').getContext('2d');
+        lossChart = new Chart(lossCtx, {
+          type: 'line',
+          data: { labels: epochs, datasets: [] },
+          options: {
+            scales: { x: { title: { display: true, text: 'Epoch' } }, y: { title: { display: true, text: '损失' } } },
+            animation: { duration: 1000, easing: 'easeInOutQuart' }
+          }
+        });
+      }
+      lossChart.data.datasets.push({
+        label: `${label} - 训练损失`,
+        data: data.train_loss,
+        borderColor: getRandomColor(),
+        fill: false
+      });
+      lossChart.update();
+
+      if (!accuracyChart) {
+        const accCtx = document.getElementById('accuracyChart').getContext('2d');
+        accuracyChart = new Chart(accCtx, {
+          type: 'line',
+          data: { labels: epochs, datasets: [] },
+          options: {
+            scales: { x: { title: { display: true, text: 'Epoch' } }, y: { title: { display: true, text: '准确率' } } },
+            animation: { duration: 1000, easing: 'easeInOutQuart' }
+          }
+        });
+      }
+      accuracyChart.data.datasets.push(
+        {
+          label: `${label} - 训练准确率`,
+          data: data.train_acc,
+          borderColor: getRandomColor(),
+          borderDash: [5, 5],
+          fill: false
+        },
+        {
+          label: `${label} - 验证准确率`,
+          data: data.val_acc,
+          borderColor: getRandomColor(),
+          fill: false
+        }
+      );
+      accuracyChart.update();
+    }
+
+    function updateTable(data, label) {
+      const tableBody = document.getElementById('resultsTable');
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${label}</td>
+        <td>${data.test_acc.toFixed(4)}</td>
+        <td>${data.cache_stats.hit_rate.toFixed(4)}</td>
+        <td>${data.cache_stats.avg_fetch_time.toFixed(4)}</td>
+        <td>${data.cache_stats.total_fetch_time.toFixed(4)}</td>
+        <td>${data.cache_stats.fetch_calls}</td>
+      `;
+      tableBody.appendChild(row);
+    }
+
+    function getRandomColor() {
+      const letters = '0123456789ABCDEF';
+      let color = '#';
+      for (let i = 0; i < 6; i++) {
+        color += letters[Math.floor(Math.random() * 16)];
+      }
+      return color;
+    }
+  </script>
+</body>
+</html>
